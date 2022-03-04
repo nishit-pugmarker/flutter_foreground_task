@@ -56,7 +56,9 @@ class SQLHelper {
   static Future<int> updateItem(
       int id, String username, String? display_name, String? avtar,String? followers, String? following) async {
     final db = await SQLHelper.db();
-
+    if(display_name==""){
+      return 0;
+    }
     final data = {
       'username': username,
       'display_name': display_name,
@@ -69,6 +71,7 @@ class SQLHelper {
 
     final result =
     await db.update('items', data, where: "id = ?", whereArgs: [id]);
+
     return result;
   }
 

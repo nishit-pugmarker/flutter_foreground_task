@@ -1,9 +1,13 @@
 import 'dart:isolate';
 import 'dart:convert';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'sql_helper.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:pull_to_refresh/pull_to_refresh.dart';
+
 
 class InstagramProfile {
   final String username;
@@ -55,8 +59,9 @@ class FirstTaskHandler extends TaskHandler {
     });
     data = await SQLHelper.getItems();
     data.forEach((element) {
-      message+=element['username']+" : "+ element['followers']+"\n";
+      message+=element['username']+" : "+ element['followers']+"\n\n";
     });
+
 
     FlutterForegroundTask.updateService(
         notificationTitle: "$timestamp",
@@ -130,6 +135,7 @@ class MyApp extends StatefulWidget {
 
 class _MyAppState extends State<MyApp> {
   List<Map<String, dynamic>> _journals = [];
+  RefreshController _refreshController = RefreshController(initialRefresh: false);
   bool _isLoading = true;
   void _refreshJournals() async {
     final data = await SQLHelper.getItems();
@@ -143,6 +149,7 @@ class _MyAppState extends State<MyApp> {
   ReceivePort? _receivePort;
 
   Future<void> _initForegroundTask() async {
+
     await FlutterForegroundTask.init(
       androidNotificationOptions: AndroidNotificationOptions(
         channelId: 'notification_channel_id',
@@ -166,7 +173,7 @@ class _MyAppState extends State<MyApp> {
         playSound: false,
       ),
       foregroundTaskOptions: const ForegroundTaskOptions(
-        interval: 60000*15,//60000 = 1 minute
+        interval: 60000 * 60,//60000 = 1 minute
         autoRunOnBoot: true,
         allowWifiLock: true,
       ),
@@ -224,6 +231,67 @@ class _MyAppState extends State<MyApp> {
   }
 
   final TextEditingController _usernameController = TextEditingController();
+  final TextEditingController _timerController = TextEditingController();
+
+  void _showTimerForm() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    var timer_service=prefs.getInt('timer_service');
+    if(timer_service!=null){
+      _timerController.text =timer_service.toString();
+    }else{
+      _timerController.text ="15";
+    }
+
+    showModalBottomSheet(
+        context: context,
+        elevation: 5,
+        isScrollControlled: true,
+        builder: (_) => Container(
+          padding: EdgeInsets.only(
+            top: 15,
+            left: 15,
+            right: 15,
+            // this will prevent the soft keyboard from covering the text fields
+            bottom: MediaQuery.of(context).viewInsets.bottom + 120,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              TextField(
+                controller: _timerController,
+                decoration: const InputDecoration(hintText: 'Minutes'),
+                  keyboardType: TextInputType.number,
+                  inputFormatters: <TextInputFormatter>[
+                    FilteringTextInputFormatter.digitsOnly
+                  ],
+              ),
+              const SizedBox(
+                height: 20,
+              ),
+              ElevatedButton(
+                onPressed: () async {
+                  // Save new journal
+                  // if (id == null) {
+                  //   await _addItem();
+                  // }
+                  //
+                  // if (id != null) {
+                  //   await _updateItem(id);
+                  // }
+                  prefs.setInt('timer_service', int. parse(_timerController.text));
+                  // Clear the text fields
+                  //_timerController.text = '';
+
+                  // Close the bottom sheet
+                  Navigator.of(context).pop();
+                },
+                child: Text('Update'),
+              )
+            ],
+          ),
+        ));
+  }
 
   void _showForm(int? id) async {
     if (id != null) {
@@ -312,6 +380,13 @@ class _MyAppState extends State<MyApp> {
     _refreshJournals();
   }
 
+  void _onRefresh() async{
+    // monitor network fetch
+    _refreshJournals();
+    // if failed,use refreshFailed()
+    _refreshController.refreshCompleted();
+  }
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -342,38 +417,64 @@ class _MyAppState extends State<MyApp> {
                         size: 26.0,
                       ),
                     )
+                ),
+                Padding(
+                    padding: EdgeInsets.only(right: 10.0),
+                    child: GestureDetector(
+                      onTap:(){ _startForegroundTask();_refreshJournals();},
+                      child: Icon(
+                        Icons.refresh,
+                        size: 26.0,
+                      ),
+                    )
+                ),
+                Padding(
+                    padding: EdgeInsets.only(right: 10.0),
+                    child: GestureDetector(
+                      onTap:_showTimerForm,
+                      child: Icon(
+                        Icons.timer,
+                        size: 26.0,
+                      ),
+                    )
                 )
               ]
           ),
-          body: _isLoading
-              ? const Center(
-            child: CircularProgressIndicator(),
-          )
-              : ListView.builder(
-            itemCount: _journals.length,
-            itemBuilder: (context, index) => Card(
-              color: Colors.orange[200],
-              margin: const EdgeInsets.all(15),
-              child: ListTile(
-                  leading: Image.network(_journals[index]['avtar']),
-                  title: Text(_journals[index]['username']),
-                  subtitle: Text(_journals[index]['display_name']+"\n"+"Follower :"+_journals[index]['followers']+"\n"+"Following :"+_journals[index]['following']),
-                  trailing: SizedBox(
-                    width: 100,
-                    child: Row(
-                      children: [
-                        IconButton(
-                          icon: const Icon(Icons.edit),
-                          onPressed: () => _showForm(_journals[index]['id']),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.delete),
-                          onPressed: () =>
-                              _deleteItem(_journals[index]['id']),
-                        ),
-                      ],
-                    ),
-                  )),
+          body: SmartRefresher(
+            enablePullDown: true,
+            header: WaterDropHeader(),
+            onRefresh: _onRefresh,
+            controller: _refreshController,
+            child: _isLoading
+                ? const Center(
+              child: CircularProgressIndicator(),
+            )
+                : ListView.builder(
+              itemCount: _journals.length,
+              itemBuilder: (context, index) => Card(
+                color: Colors.orange[200],
+                margin: const EdgeInsets.all(15),
+                child: ListTile(
+                    leading: Image.network(_journals[index]['avtar']),
+                    title: Text(_journals[index]['username']),
+                    subtitle: Text(_journals[index]['display_name']+"\n"+"Follower :"+_journals[index]['followers']+"\n"+"Following :"+_journals[index]['following']),
+                    trailing: SizedBox(
+                      width: 100,
+                      child: Row(
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.edit),
+                            onPressed: () => _showForm(_journals[index]['id']),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.delete),
+                            onPressed: () =>
+                                _deleteItem(_journals[index]['id']),
+                          ),
+                        ],
+                      ),
+                    )),
+              ),
             ),
           ),
           floatingActionButton: FloatingActionButton(
@@ -422,28 +523,39 @@ Future<InstagramProfile> getInstagramProfile(String username) async {
     /* Get data from instagram and decode json */
     var _response =
     await http.get(Uri.parse(Uri.encodeFull(url)), headers: _headers);
-    final _extractedData =
-    json.decode(_response.body) as Map<String, dynamic>;
-
-    if (_extractedData.isNotEmpty) {
-      var _graphql = _extractedData['graphql'];
-      var _user = _graphql['user'];
-
-      /* Get profile information */
-      _followers = _user['edge_followed_by']['count'].toString();
-      _following = _user['edge_follow']['count'].toString();
-      _username = _user['username'].toString();
-      _display_name = _user['full_name'].toString();
-      _avtar = _user['profile_pic_url_hd'].toString();
-
-      /* Save profile information */
+    String body = _response.body;
+    if (body.startsWith('<!DOCTYPE html>')) {
       _instagramProfile = InstagramProfile(
-          followers: _followers,
-          following: _following,
-          username: _username,
-          display_name: _display_name,
-          avtar: _avtar
+          followers: "",
+          following: "",
+          username: username,
+          display_name: "",
+          avtar: ""
       );
+    }else {
+      final _extractedData =
+      json.decode(_response.body) as Map<String, dynamic>;
+
+      if (_extractedData.isNotEmpty) {
+        var _graphql = _extractedData['graphql'];
+        var _user = _graphql['user'];
+
+        /* Get profile information */
+        _followers = _user['edge_followed_by']['count'].toString();
+        _following = _user['edge_follow']['count'].toString();
+        _username = _user['username'].toString();
+        _display_name = _user['full_name'].toString();
+        _avtar = _user['profile_pic_url_hd'].toString();
+
+        /* Save profile information */
+        _instagramProfile = InstagramProfile(
+            followers: _followers,
+            following: _following,
+            username: _username,
+            display_name: _display_name,
+            avtar: _avtar
+        );
+      }
     }
   } catch (error) {
     print(error);
